@@ -1,9 +1,84 @@
-<!-- BEGIN:nextjs-agent-rules -->
+## Styling
+### Brand Colors
 
-## This is NOT the Next.js you know
+- Name Hex Typical use
+Primary light blue #4FBBEA Highlights, links, checks, gradient start
+Primary dark blue #3160AE Headers, primary buttons, active tabs
+Primary button hover #254a8f Navy CTA hover
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+- Hex Typical use
+#1a365d In-app titles (serif)
+#1a2744 Landing headlines
+#475569 Secondary body
+#64748b Meta, captions
+#f1f5f9 Logged-in page background
+#FAFBFD Public landing background
+#FFFFFF Cards, heroes
 
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+These are implemented as Tailwind v4 theme tokens in `src/app/globals.css`
+(`@theme` block): `brand-light`, `brand`, `brand-hover`, `title`, `headline`,
+`body`, `meta`, `bg-app`, `bg-landing` (e.g. `bg-brand`, `text-title`,
+`bg-bg-app`). The site is light-theme only.
 
-<!-- END:nextjs-agent-rules -->
+### Common UI Patterns
+
+- Eyebrow: #4FBBEA , uppercase, wide tracking (e.g. 11px, ~0.18 to 0.22em)
+- Cards: rounded-2xl , border #3160AE at ~12% opacity, white / white 90%, light shadow
+- Primary CTA: rounded-full , #3160AE fill, white text
+- Secondary CTA: rounded-full , border #3160AE at ~25% opacity, text #3160AE
+- Accent: vertical or horizontal gradient #4FBBEA → #3160AE
+
+### Typography
+Role Font Fallback
+Body / UI DM Sans system-ui, sans-serif
+Display / headings DM Serif Display Georgia, serif
+
+Fonts are loaded via `next/font/google` in `src/app/layout.tsx` and exposed as
+Tailwind utilities `font-landing` (DM Sans, body) and `font-heading` (DM Serif
+Display, headings). Landing uses DM Sans for body and DM Serif Display for
+heroes. Logged-in workbench-style pages use DM Sans + serif titles at #1a365d.
+Some standalone investor-style forms still use Montserrat (headings) and Open Sans (body).
+
+## App Structure
+
+- `/` — public landing page (`src/app/page.tsx`), auth-aware header.
+- `/login` — combined email/password sign-in/sign-up (`src/app/login/page.tsx`),
+  redirects to `/dashboard` on success.
+- `/dashboard` — Q&A page (`src/app/dashboard/page.tsx`), requires auth
+  (redirects to `/login` when signed out).
+
+## Firebase
+
+- Config in `src/lib/firebase.ts` (lazy getters; env vars `NEXT_PUBLIC_FIREBASE_*` in `.env`).
+- Auth: email/password via Firebase Auth.
+- Data: Firebase **Realtime Database** (not Firestore).
+- `src/lib/useAuth.ts` exports `useAuth()` (`{ user, loading }` via
+  `onAuthStateChanged`) and `signOutUser()`.
+
+### RTDB data shape
+
+Questions & answers are stored per user (the user is the tenant):
+
+```
+users/$uid/qa/$pushId = {
+  question: string,
+  answer: string | null,
+  createdAt: serverTimestamp,
+  answeredAt: serverTimestamp | null
+}
+```
+
+Security rules restrict `users/$uid` read/write to the owner:
+
+```json
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}
+```
