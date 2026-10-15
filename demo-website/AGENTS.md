@@ -44,8 +44,21 @@ Some standalone investor-style forms still use Montserrat (headings) and Open Sa
 - `/` — public landing page (`src/app/page.tsx`), auth-aware header.
 - `/login` — combined email/password sign-in/sign-up (`src/app/login/page.tsx`),
   redirects to `/dashboard` on success.
-- `/dashboard` — Q&A page (`src/app/dashboard/page.tsx`), requires auth
-  (redirects to `/login` when signed out).
+- `/dashboard` — assessment + Q&A page (`src/app/dashboard/page.tsx`), requires
+  auth (redirects to `/login` when signed out). Shows a hard-coded 4-question
+  founder assessment (radio groups, one answer each: journey, hardest thing,
+  stage, pitch deck import status). On submit it computes raw category scores
+  plus four 0–100 "display scores" (three random, AI confidence = avg of the
+  other three), persists everything to RTDB, and redirects to
+  `/recommendation`. Below the form sits the running per-user Q&A list.
+  Question definitions, scoring, and banded recommendation copy live in
+  `src/lib/assessment.ts`.
+- `/recommendation` — results page (`src/app/recommendation/page.tsx`),
+  requires auth (redirects to `/login` when signed out; redirects to
+  `/dashboard` when no assessment exists yet). Renders four score cards
+  (Overall Confidence, VC Fundability Score, Leading Competitor Score, AI
+  Confidence) out of 100 with progress bars, each with a band-specific
+  (low/mid/high) description, improvement tips, and lorem-ipsum links.
 
 ## Firebase
 
@@ -65,6 +78,29 @@ users/$uid/qa/$pushId = {
   answer: string | null,
   createdAt: serverTimestamp,
   answeredAt: serverTimestamp | null
+}
+```
+
+The dashboard assessment is a single record per user, overwritten on each
+submit (answers are option ids from `src/lib/assessment.ts`). `scores` are the
+raw category sums; `displayScores` are the four 0–100 numbers shown on
+`/recommendation` (three random + AI confidence = rounded avg of the other
+three), generated at submit time so refreshes stay stable.
+
+```
+users/$uid/assessment = {
+  journey: string,
+  hardest: string,
+  stage: string,
+  pitchDeck: string,
+  scores: { overall: number, leadingCompetitor: number, fundability: number },
+  displayScores: {
+    overallConfidence: number,
+    vcFundabilityScore: number,
+    leadingCompetitorScore: number,
+    aiConfidence: number
+  },
+  updatedAt: serverTimestamp
 }
 ```
 

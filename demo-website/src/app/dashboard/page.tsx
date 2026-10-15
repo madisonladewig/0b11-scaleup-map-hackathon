@@ -1,10 +1,17 @@
 "use client";
 
-import { onValue, push, ref, serverTimestamp, update } from "firebase/database";
+import { onValue, ref, serverTimestamp, set, update } from "firebase/database";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  type AssessmentAnswers,
+  type AssessmentRecord,
+  computeScores,
+  generateDisplayScores,
+  QUESTIONS,
+} from "@/lib/assessment";
 import { getFirebaseDb } from "@/lib/firebase";
 import { signOutUser, useAuth } from "@/lib/useAuth";
 
@@ -21,8 +28,14 @@ export default function DashboardPage() {
   const { user, loading } = useAuth();
 
   const [entries, setEntries] = useState<QaEntry[]>([]);
-  const [question, setQuestion] = useState("");
-  const [posting, setPosting] = useState(false);
+  const [assessment, setAssessment] = useState<AssessmentRecord | null>(null);
+  const [answers, setAnswers] = useState<AssessmentAnswers>({
+    journey: null,
+    hardest: null,
+    stage: null,
+    pitchDeck: null,
+  });
+  const [submitting, setSubmitting] = useState(false);
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({});
   const [savingAnswerId, setSavingAnswerId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -38,7 +51,7 @@ export default function DashboardPage() {
 
     const db = getFirebaseDb();
     const qaRef = ref(db, `users/${user.uid}/qa`);
-    const unsubscribe = onValue(qaRef, (snapshot) => {
+    const unsubscribeQa = onValue(qaRef, (snapshot) => {
       const value = snapshot.val() as Record<
         string,
         Omit<QaEntry, "id">
@@ -56,28 +69,57 @@ export default function DashboardPage() {
         : [];
       setEntries(list);
     });
-    return unsubscribe;
+
+    const assessmentRef = ref(db, `users/${user.uid}/assessment`);
+    const unsubscribeAssessment = onValue(assessmentRef, (snapshot) => {
+      const value = snapshot.val() as AssessmentRecord | null;
+      setAssessment(value);
+      if (value) {
+        setAnswers({
+          journey: value.journey ?? null,
+          hardest: value.hardest ?? null,
+          stage: value.stage ?? null,
+          pitchDeck: value.pitchDeck ?? null,
+        });
+      }
+    });
+
+    return () => {
+      unsubscribeQa();
+      unsubscribeAssessment();
+    };
   }, [user]);
 
-  async function handleAsk(e: React.FormEvent) {
+  const allAnswered = useMemo(
+    () => QUESTIONS.every((q) => answers[q.id] !== null),
+    [answers],
+  );
+
+  async function handleSubmitAssessment(e: React.FormEvent) {
     e.preventDefault();
-    if (!user || !question.trim()) return;
+    if (!user || !allAnswered) return;
 
     setError("");
-    setPosting(true);
+    setSubmitting(true);
     try {
       const db = getFirebaseDb();
-      await push(ref(db, `users/${user.uid}/qa`), {
-        question: question.trim(),
-        answer: null,
-        createdAt: serverTimestamp(),
-        answeredAt: null,
+      const computed = computeScores(answers);
+      const displayScores = generateDisplayScores();
+      await set(ref(db, `users/${user.uid}/assessment`), {
+        journey: answers.journey,
+        hardest: answers.hardest,
+        stage: answers.stage,
+        pitchDeck: answers.pitchDeck,
+        scores: computed,
+        displayScores,
+        updatedAt: serverTimestamp(),
       });
-      setQuestion("");
+      router.push("/recommendation");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to save question");
-    } finally {
-      setPosting(false);
+      setError(
+        err instanceof Error ? err.message : "Failed to save assessment",
+      );
+      setSubmitting(false);
     }
   }
 
@@ -126,6 +168,14 @@ export default function DashboardPage() {
           </Link>
 
           <div className="flex items-center gap-4">
+            {assessment && (
+              <Link
+                href="/recommendation"
+                className="rounded-full border border-brand/25 px-4 py-1.5 text-sm font-medium text-brand transition-colors hover:border-brand/50"
+              >
+                View recommendation
+              </Link>
+            )}
             <span className="hidden text-sm text-meta sm:block">
               {user.email}
             </span>
@@ -143,35 +193,73 @@ export default function DashboardPage() {
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-10">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-brand-light">
-            Your knowledge map
+            Your Venture Intelligence
           </p>
           <h1 className="mt-1 font-heading text-4xl text-title">
-            Questions &amp; Answers
+            Founder Assessment
           </h1>
+          <p className="mt-2 text-sm text-body">
+            Answer four quick questions and we'll map your scores and point you
+            at the most useful advice next.
+          </p>
         </div>
 
         <section className="rounded-2xl border border-brand/12 bg-white p-6 shadow-sm">
-          <form onSubmit={handleAsk} className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-body">
-                Ask a question
-              </span>
-              <textarea
-                required
-                rows={3}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                className="resize-none rounded-lg border border-brand/15 bg-white px-3 py-2 text-sm text-headline outline-none transition-colors focus:border-brand-light"
-                placeholder="What do you need to figure out next?"
-              />
-            </label>
+          <form
+            onSubmit={handleSubmitAssessment}
+            className="flex flex-col gap-8"
+          >
+            {QUESTIONS.map((question, qi) => (
+              <fieldset key={question.id} className="flex flex-col gap-3">
+                <legend className="text-base font-semibold text-headline">
+                  <span className="mr-2 text-brand-light">{qi + 1}.</span>
+                  {question.title}
+                </legend>
+                <p className="text-xs text-meta">Select one.</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {question.options.map((option) => {
+                    const selected = answers[question.id] === option.id;
+                    return (
+                      <label
+                        key={option.id}
+                        className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-colors ${
+                          selected
+                            ? "border-brand bg-brand/5 text-headline"
+                            : "border-brand/15 bg-white text-body hover:bg-bg-app"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={question.id}
+                          value={option.id}
+                          checked={selected}
+                          onChange={() =>
+                            setAnswers((prev) => ({
+                              ...prev,
+                              [question.id]: option.id,
+                            }))
+                          }
+                          className="h-4 w-4 accent-brand"
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            ))}
+
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={posting || !question.trim()}
+                disabled={submitting || !allAnswered}
                 className="flex h-10 items-center justify-center rounded-full bg-brand px-6 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:opacity-50"
               >
-                {posting ? "Saving…" : "Save question"}
+                {submitting
+                  ? "Saving…"
+                  : assessment
+                    ? "Update my recommendation"
+                    : "Get my recommendation"}
               </button>
             </div>
           </form>
@@ -182,77 +270,6 @@ export default function DashboardPage() {
             {error}
           </p>
         )}
-
-        <section className="flex flex-col gap-4">
-          {entries.length === 0 ? (
-            <div className="rounded-2xl border border-brand/12 bg-white p-8 text-center shadow-sm">
-              <p className="text-sm text-meta">
-                No questions yet. Ask your first question above to start your
-                map.
-              </p>
-            </div>
-          ) : (
-            entries.map((entry) => (
-              <article
-                key={entry.id}
-                className="rounded-2xl border border-brand/12 bg-white p-6 shadow-sm"
-              >
-                <div className="flex gap-4">
-                  <div
-                    aria-hidden
-                    className="w-1 shrink-0 rounded-full bg-gradient-to-b from-brand-light to-brand"
-                  />
-                  <div className="flex flex-1 flex-col gap-3">
-                    <h2 className="text-base font-semibold text-headline">
-                      {entry.question}
-                    </h2>
-
-                    {entry.answer ? (
-                      <div className="rounded-xl bg-bg-app px-4 py-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-light">
-                          Answer
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-body">
-                          {entry.answer}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        <textarea
-                          rows={2}
-                          value={answerDrafts[entry.id] ?? ""}
-                          onChange={(e) =>
-                            setAnswerDrafts((prev) => ({
-                              ...prev,
-                              [entry.id]: e.target.value,
-                            }))
-                          }
-                          className="resize-none rounded-lg border border-brand/15 bg-white px-3 py-2 text-sm text-headline outline-none transition-colors focus:border-brand-light"
-                          placeholder="Write your answer…"
-                        />
-                        <div className="flex justify-end">
-                          <button
-                            type="button"
-                            onClick={() => handleAnswer(entry.id)}
-                            disabled={
-                              savingAnswerId === entry.id ||
-                              !(answerDrafts[entry.id] ?? "").trim()
-                            }
-                            className="flex h-9 items-center justify-center rounded-full border border-brand/25 px-5 text-sm font-medium text-brand transition-colors hover:border-brand/50 disabled:opacity-50"
-                          >
-                            {savingAnswerId === entry.id
-                              ? "Saving…"
-                              : "Save answer"}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </article>
-            ))
-          )}
-        </section>
       </main>
     </div>
   );
