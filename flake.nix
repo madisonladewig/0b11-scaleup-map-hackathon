@@ -26,6 +26,7 @@
               pnpm
               biome
             ];
+            env.BIOME_BINARY = "${pkgs.biome}/bin/biome";
           };
         }
       );
